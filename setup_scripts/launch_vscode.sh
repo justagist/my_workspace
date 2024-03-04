@@ -17,7 +17,7 @@ CONTAINER_HEX=$(printf $CONTAINER_NAME | xxd -p | tr '\n' ' ' | sed 's/\\s//g' |
 
 export DEBIAN_FRONTEND=noninteractive
 
-rocker --nvidia --x11 --user --pull --env DEBIAN_FRONTEND=noninteractive --git --name "$CONTAINER_NAME" --volume "${PWD}":$HOME/workspaces/"${CONTAINER_NAME}":Z --oyr-run-arg " --detach" --deps-dependencies ros:humble
+rocker --nvidia --x11 --user --pull --network host --git --name "$CONTAINER_NAME" --volume "${PWD}":$HOME/workspaces/"${CONTAINER_NAME}":Z --oyr-run-arg " --detach" --deps-dependencies ros:humble
 
 # docker pull ghcr.io/red5d/docker-autocompose:latest
 # docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/red5d/docker-autocompose $CONTAINER_NAME > .devcontainer/docker-compose.yaml

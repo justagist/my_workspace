@@ -47,5 +47,11 @@
                 "reveal": "always"
             },
         },
+		{
+			"label": "launch container",
+			"detail": "Uses rocker to launch a container and spawns a new vscode window attached to the container",
+			"type": "shell",
+			"command": "setup_scripts/launch_vscode.sh"
+		},
 	],
 }
