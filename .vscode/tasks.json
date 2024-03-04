@@ -1,0 +1,51 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "autoformat",
+			"detail": "Use ruff and black to automatically fix and format the code",
+			"type": "shell",
+			"command": "ruff . --fix && black ."
+		},
+		{
+			"label": "pylint",
+			"detail": "Run pylint on files tracked by git",
+			"type": "shell",
+			"command": "pylint $(git ls-files '*.py') "
+		},
+		{
+			"label": "code coverage",
+			"detail": "Run code coverage and print a coverage report, also update coverage.xml for in the in-editor coverage gutter",
+			"type": "shell",
+			"command": "coverage run -m pytest; coverage xml -o coverage.xml"
+		},
+		{
+			"label": "code coverage report",
+			"detail": "Display the code coverage report. This assumes you have already have a coverage report generated. If not run the code ocverage task",
+			"type": "shell",
+			"dependsOn": [
+				"code coverage"
+			],
+			"command": "coverage report -m"
+		},
+		{
+			"label": "pytest duration",
+			"detail": "Run pytest and track the duration of each test",
+			"type": "shell",
+			"command": "pytest --durations=0"
+		},
+		{
+            "label": "Install All Recommended Extensions",
+            "type": "shell",           
+            "linux": {
+                "command": "cat .vscode/extensions.json | jq .recommendations[] | xargs -n 1 code . --install-extension"
+            },
+            "runOptions": {
+                "runOn": "folderOpen"
+            },
+            "presentation": {
+                "reveal": "always"
+            },
+        },
+	],
+}

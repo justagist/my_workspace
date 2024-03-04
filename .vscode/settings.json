@@ -1,0 +1,21 @@
+{
+	"python.testing.pytestArgs": [],
+	"python.testing.unittestEnabled": false,
+	"python.testing.pytestEnabled": true,
+	"editor.formatOnSave": true,
+	"search.exclude": {
+		"index.html": true,
+	},
+	"files.watcherExclude": {
+		"**/cachedir/**": true,
+	},
+	"[python]": {
+		"editor.defaultFormatter": "ms-python.black-formatter",
+		"editor.formatOnSave": true,
+	},
+	"files.exclude": {
+		"**/__pycache__/**": true,
+	},	
+	"python.analysis.autoImportCompletions": false,
+	"python.analysis.typeCheckingMode": "off" //vscode gets it wrong more than right and mostly gets in the way
+}
