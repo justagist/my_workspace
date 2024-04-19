@@ -4,10 +4,10 @@ apt_tools:
   - python3-pip
   - apt-utils
   - jq
+  - python-is-python3
 
 pip_tools:
   - flit
   - pip #updates to latest pip
-
-pip:
-  - pip
+  - setuptools
+  - wheel
