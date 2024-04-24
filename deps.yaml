@@ -1,3 +1,8 @@
+env:
+  - MY_WORKSPACE_PATH="${HOME}/my_workspace" # TODO: $HOME is not defined yet
+  - COLCON_LOG_PATH="${HOME}/my_workspace/log"
+  - PATH="${HOME}/my_workspace/bin:$PATH"
+
 apt_tools:
   - git
   - git-lfs

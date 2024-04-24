@@ -1,0 +1,445 @@
+#! /usr/bin/env python
+# PYTHON_ARGCOMPLETE_OK
+
+import argparse
+import argcomplete
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import pathlib
+from typing import Union, List, ByteString, Tuple
+
+
+LOG_FORMATTER = logging.Formatter(
+    fmt="[%(asctime)s][%(name)s][%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+LOG_HANDLER = logging.StreamHandler()
+LOG_HANDLER.setFormatter(LOG_FORMATTER)
+LOGGER = logging.getLogger("jbuild")
+LOGGER.setLevel(logging.INFO)
+LOGGER.addHandler(LOG_HANDLER)
+
+# Values passed to argparse
+COLCON_OPTION_MAP = {
+    "only": "--packages-select",
+    "upto": "--packages-up-to",
+    "above": "--packages-above",
+}
+
+WORKSPACE_PATH = os.getenv("MY_WORKSPACE_PATH")
+
+COLCON_LOG_PATH = os.environ.get("COLCON_LOG_PATH")
+
+# requires pip install git+https://github.com/ruffsl/colcon-clean.git
+USE_COLCON_CACHE = False
+
+
+def clean_folder(path: str, verbose: bool = True) -> bool:
+    if not os.path.exists(path):
+        if verbose:
+            LOGGER.warning("Not able to clean: {0}. Path does not exist.".format(path))
+        return False
+
+    elif not os.access(path, os.W_OK):
+        LOGGER.warning("Not able to clean: {0}. Read-only file system.".format(path))
+        return False
+
+    elif not os.listdir(path):
+        LOGGER.debug(f"'{path}' was already clean.")
+        return False
+
+    if verbose:
+        LOGGER.info("Cleaning folder: {0}".format(path))
+
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            os.unlink(os.path.join(root, f))
+        for d in dirs:
+            dfull = os.path.join(root, d)
+            if os.path.islink(dfull):
+                os.unlink(dfull)
+            else:
+                shutil.rmtree(dfull)
+    return True
+
+
+def clean_cache_files(path: str) -> None:
+    LOGGER.info("Cleaning colcon cache files in {}".format(path))
+    files = pathlib.Path(path).rglob("cache/*.json")
+    for f in files:
+        f.unlink()
+        LOGGER.debug("Deleting file: {}".format(path))
+
+
+def read_pkgs_file(pkg_file: str) -> List[str]:
+    LOGGER.debug("Reading packages from file: {0}".format(pkg_file))
+
+    pkg_list = list()
+    with open(pkg_file, "r") as f:
+        lines = f.readlines()
+        pkg_list = [l.replace("\n", "") for l in lines if l[0] != "#"]
+        pkg_list = [l for l in pkg_list if len(l) > 0]
+
+    return list(set(pkg_list))
+
+
+def get_pkgs_list(args: argparse.Namespace) -> List[str]:
+    pkgs = list()
+    if args.file:
+        for f in args.file:
+            pkgs += read_pkgs_file(os.path.abspath(f))
+    pkgs += list(set(args.pkgs)) if args.pkgs else []
+
+    ret = sorted(list(set(pkgs)))
+    LOGGER.debug("Packages: {0}".format(" ".join(ret)))
+    return ret
+
+
+def get_dirs(args: argparse.Namespace) -> List[str]:
+    ros_distro = os.environ["ROS_DISTRO"]
+
+    src_dir = "{0}/src/".format(WORKSPACE_PATH)
+    build_dir = "{0}/build/{1}".format(WORKSPACE_PATH, ros_distro)
+    install_dir = "/opt/ros/{0}".format(ros_distro)
+    test_dir = "{0}/test/{1}".format(WORKSPACE_PATH, ros_distro)
+
+    return src_dir, build_dir, install_dir, test_dir
+
+
+def get_source_command(args: argparse.Namespace) -> List[str]:
+    return [
+        (
+            f"source {WORKSPACE_PATH}/install/setup.sh &&"
+            if os.path.exists(f"{WORKSPACE_PATH}/install/setup.sh")
+            else f"source {get_dirs(None)[2]}/setup.bash &&"
+        )
+    ]
+
+
+def run_subprocess(
+    args: argparse.Namespace, cmd: List[str], capture_output: bool = False
+) -> Union[bool, Tuple[bool, ByteString]]:
+    source_cmd = get_source_command(args=args)
+    cmd_str = " ".join(source_cmd + cmd)
+    command = ["bash", "-c", cmd_str]
+
+    LOGGER.info("Running subprocess command: {0}".format(" ".join(command)))
+
+    stdout = None
+    stderr = None
+    if capture_output:
+        stdout = subprocess.PIPE
+        stderr = subprocess.PIPE
+
+    process = subprocess.Popen(
+        command, cwd=WORKSPACE_PATH, stdout=stdout, stderr=stderr
+    )
+    process.wait()
+
+    LOGGER.info("Subprocess return code: {0}".format(process.returncode))
+    print("Command", command)
+    if capture_output:
+        stdout_data, stderr_data = process.communicate()
+        print(
+            stderr_data.decode("utf-8"), file=sys.stderr
+        )  # don't hide captured stderr
+        if args.debug:
+            LOGGER.debug(stdout_data.decode("utf-8"))
+        return bool(process.returncode == 0), stdout_data
+
+    return bool(process.returncode == 0)
+
+
+def handle_build_cmd(
+    args: argparse.Namespace, unknown_args: List[str]
+) -> Union[bool, Tuple[bool, ByteString]]:
+    LOGGER.info("Handling BUILD command")
+
+    src_dir, build_dir, install_dir, test_dir = get_dirs(args=args)
+
+    colcon_cache = USE_COLCON_CACHE
+    if (
+        args.no_colcon_cache
+        or os.getenv("JBUILD_DISABLE_COLCON_CACHE") is not None
+        or args.type == "only"
+    ):
+        colcon_cache = False
+
+    enable_skip_cache_valid = colcon_cache
+
+    if colcon_cache:
+        if os.path.isdir(install_dir) and len(os.listdir(install_dir)) == 0:
+            # Install directory is empty, don't skip cached packages
+            LOGGER.info(
+                "Colcon cache: Install directory is empty, building all requested packages"
+            )
+            enable_skip_cache_valid = False
+
+        cmd = ["colcon", "cache", "lock"]
+        if args.type != "all":
+            cmd += [COLCON_OPTION_MAP[args.type]] + get_pkgs_list(args=args)
+        LOGGER.info("Colcon cache: running cache lock command")
+        if not run_subprocess(args, cmd, capture_output=True):
+            LOGGER.error(
+                "Colcon cache: cache lock failed, building all requested packages"
+            )
+            enable_skip_cache_valid = False
+
+    cmd = ["colcon", "build"]
+    if args.type != "all":
+        cmd += [COLCON_OPTION_MAP[args.type]] + get_pkgs_list(args=args)
+    if enable_skip_cache_valid:
+        # Clean the stale pkgs that has invalid cache in the install directory
+        LOGGER.info("Colcon list: checking packages that has invalid cache")
+        list_cmd = [
+            "colcon",
+            "list",
+            "--packages-select-cache-invalid",
+            "--packages-select-cache-key",
+            "build",
+            "-n",
+            "-t",
+        ]
+        _, retval = run_subprocess(args, list_cmd, capture_output=True)
+
+        output = retval.decode("utf-8").split("\n")
+
+        # NOTE: colcon clean packages doesn't work with workspace with --merge-install
+        # fallback to colcon clean workspace --clean-match
+        clean_stale_pkg_cmd = [
+            "colcon",
+            "clean",
+            "workspace",
+            "-y",
+            "--base-select",
+            "install",
+            "--clean-match",
+        ]
+        pkg_name_list = []
+        for pkg_name in output:
+            if pkg_name and " " not in pkg_name and "/" not in pkg_name:
+                LOGGER.info(f"Package [{pkg_name}] has an invalid cache")
+                pkg_name_list.extend(
+                    [
+                        f"'include/{pkg_name}'",
+                        f"'lib/{pkg_name}'",
+                        f"'lib/lib{pkg_name}'",
+                        f"'share/{pkg_name}'",
+                    ]
+                )
+        if len(pkg_name_list) > 0:
+            clean_stale_pkg_cmd += pkg_name_list
+            run_subprocess(args, clean_stale_pkg_cmd)
+
+        cmd += ["--packages-skip-cache-valid"]
+    cmd += ["--event-handlers", "console_direct+"] if args.verbose else []
+    cmd += unknown_args
+
+    return run_subprocess(args, cmd)
+
+
+def handle_remove_cmd(args: argparse.Namespace, unknown_args: List[str]) -> bool:
+    LOGGER.info("Handling REMOVE command")
+
+    src_dir, build_dir, install_dir, test_dir = get_dirs(args=args)
+
+    cmd = ["colcon", "list", "-n", "-t"]
+    if args.type != "all":
+        cmd += [COLCON_OPTION_MAP[args.type]] + get_pkgs_list(args=args)
+    cmd += ["--event-handlers", "console_direct+"] if args.verbose else []
+    cmd += unknown_args
+
+    status, retval = run_subprocess(args, cmd, capture_output=True)
+
+    if not status:
+        LOGGER.warning(f"Failed to run colcon command: {cmd}")
+        return status
+
+    output = retval.decode("utf-8").split("\n")
+    for pkg_name in output:
+        if pkg_name and " " not in pkg_name and "/" not in pkg_name:
+            LOGGER.info(f"Removing '{pkg_name}'")
+            b_status = clean_folder(f"{build_dir}/{pkg_name}", verbose=args.verbose)
+            for dir in ["lib", "include", "share"]:
+                i_status = clean_folder(
+                    f"{install_dir}/{dir}/{pkg_name}", verbose=args.verbose
+                )
+            if not b_status:
+                LOGGER.warning(
+                    f"Installation of {pkg_name} was not found. Could not remove."
+                )
+        else:
+            print(
+                pkg_name
+            )  # captured stdout is logged to console output if it is not a package name
+    return status
+
+
+def handle_clean_cmd(args: argparse.Namespace, unknown_args: List[str]) -> bool:
+    LOGGER.info("Handling CLEAN command")
+
+    _, build_dir, install_dir, test_dir = get_dirs(args=args)
+
+    cmd = ["colcon", "clean", "workspace", "-y"]
+    base_select = []
+    # Clean the entire workspace by default if args is not supplied
+    is_base_selected = False
+    if args.b:
+        is_base_selected = True
+        base_select.append("build")
+    if args.i:
+        is_base_selected = True
+        base_select.append("install")
+        clean_cache_cmd = cmd + ["--clean-match", "'*cache/'"]
+        run_subprocess(args, clean_cache_cmd)
+    if args.t:
+        is_base_selected = True
+        base_select.append("test_result")
+    if args.l:
+        is_base_selected = True
+        base_select.append("log")
+
+    if is_base_selected:
+        cmd += ["--base-select"]
+        cmd += base_select
+
+    return run_subprocess(args, cmd)
+
+
+def handle_test_cmd(
+    args: argparse.Namespace, unknown_args: List[str]
+) -> Union[bool, Tuple[bool, ByteString]]:
+    LOGGER.info("Handling TEST command")
+
+    src_dir, build_dir, install_dir, test_dir = get_dirs(args=args)
+
+    cmd = ["colcon", "test"]
+    if args.type != "all":
+        cmd += [COLCON_OPTION_MAP[args.type]] + get_pkgs_list(args)
+    cmd += ["--event-handlers", "console_direct+"] if args.verbose else []
+    cmd += ["--python-testing", "pytest"]
+    cmd += unknown_args
+
+    if not run_subprocess(args, cmd):
+        return False
+
+    cmd = ["colcon", "test-result"]
+    cmd += ["--all"] if args.verbose else []
+
+    return run_subprocess(args, cmd)
+
+
+def available_package_completer(**kwargs):
+    return [i for i in os.environ.get("ALL_AVAILABLE_PKGS").split(" ")]
+
+
+def define_common_cmds(parser: argparse.ArgumentParser) -> None:
+    type_parser = parser.add_subparsers(title="type", dest="type", required=True)
+    subparsers = []
+    subparsers.append(
+        type_parser.add_parser("only", help="Replacing --packages-select")
+    )
+    subparsers.append(type_parser.add_parser("upto", help="Replacing --packages-up-to"))
+    subparsers.append(
+        type_parser.add_parser("above", help="Replacing --packages-above")
+    )
+    subparsers.append(type_parser.add_parser("all", help="All packages"))
+
+    for subparser in subparsers:
+        if not subparser.prog.endswith("all"):
+            group = subparser.add_mutually_exclusive_group(required=True)
+            group.add_argument(
+                "-f",
+                "--file",
+                nargs="+",
+                default=None,
+                help="List of text files containing list of package names",
+            )
+            group.add_argument(
+                "-p", "--pkgs", nargs="*", help="List of packages to build/remove"
+            ).completer = available_package_completer
+        subparser.add_argument(
+            "-v", "--verbose", action="store_true", help="Run in verbose mode"
+        )
+        subparser.add_argument(
+            "--no-colcon-cache",
+            action="store_true",
+            help="Disable the use of colcon cache",
+        )
+
+
+def define_build_cmd_parser(parser: argparse.ArgumentParser) -> None:
+    build_parser = parser.add_parser(
+        "build", help="Build packages", description="Build code using colcon build"
+    )
+    define_common_cmds(build_parser)
+    build_parser.set_defaults(func=handle_build_cmd)
+
+
+def define_clean_cmd_parser(parser: argparse.ArgumentParser) -> None:
+    clean_parser = parser.add_parser(
+        "clean", help="Clean build, install and logs directories"
+    )
+    clean_parser.add_argument("-b", action="store_true", help="Clean the build folder")
+    clean_parser.add_argument(
+        "-i", action="store_true", help="Clean the install folder"
+    )
+    clean_parser.add_argument("-l", action="store_true", help="Clean the logs folder")
+    clean_parser.add_argument("-t", action="store_true", help="Clean the test folder")
+    clean_parser.set_defaults(func=handle_clean_cmd)
+
+
+def define_remove_cmd_parser(parser: argparse.ArgumentParser) -> None:
+    remove_parser = parser.add_parser(
+        "remove",
+        help='Remove built packages (use "jbuild remove only|upto|above -p" or "jbuild remove all")',
+        description='Remove built packages (use "jbuild remove only|upto|above -p" or "jbuild remove all")',
+    )
+    define_common_cmds(remove_parser)
+    remove_parser.set_defaults(func=handle_remove_cmd)
+
+
+def define_test_cmd_parser(parser: argparse.ArgumentParser) -> None:
+    test_parser = parser.add_parser(
+        "test",
+        help="Test packages",
+        description="Test code using colcon test & colcon test-result",
+    )
+    define_common_cmds(test_parser)
+    test_parser.set_defaults(func=handle_test_cmd)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Custom Build Tool")
+    parser.add_argument("--debug", action="store_true", help="Run in debug mode")
+
+    command_subparser = parser.add_subparsers(title="Commands", help="")
+
+    define_build_cmd_parser(command_subparser)
+    define_clean_cmd_parser(command_subparser)
+    define_test_cmd_parser(command_subparser)
+    define_remove_cmd_parser(command_subparser)
+    argcomplete.autocomplete(parser)
+    args, unknown_args = parser.parse_known_args()
+
+    LOGGER.debug("Args: {0}".format(args))
+    LOGGER.debug("Unknown args: {0}".format(unknown_args))
+
+    if hasattr(args, "func"):
+        if hasattr(args, "type") and args.type == "none":
+            LOGGER.info('Exiting as "none" was passed as a build/test command type')
+            sys.exit(os.EX_OK)
+
+        elif not args.func(args, unknown_args):
+            LOGGER.error("Failure")
+            sys.exit(os.EX_SOFTWARE)
+
+        LOGGER.info("Success")
+        sys.exit(os.EX_OK)
+
+    else:
+        parser.print_help()
+        sys.exit(os.EX_SOFTWARE)
