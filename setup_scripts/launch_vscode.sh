@@ -17,7 +17,7 @@ docker stop "$CONTAINER_NAME" || true
 
 CONTAINER_HEX=$(printf $CONTAINER_NAME | xxd -p | tr '\n' ' ' | sed 's/\\s//g' | tr -d ' ')
 
-rocker --user --nvidia --x11 --git --name "$CONTAINER_NAME" --volume "${PWD}":$HOME/"${CONTAINER_NAME}":Z --oyr-run-arg " --entrypoint $HOME/${CONTAINER_NAME}/setup_scripts/entrypoint/entrypoint.sh --detach" $IMAGE_NAME /bin/bash
+rocker --user --nvidia --x11 --privileged --git --name "$CONTAINER_NAME" --volume "${PWD}":$HOME/"${CONTAINER_NAME}":Z --volume "/dev/input":"/dev/input":Z --user-preserve-groups --oyr-run-arg " --entrypoint $HOME/${CONTAINER_NAME}/setup_scripts/entrypoint/entrypoint.sh --detach" $IMAGE_NAME /bin/bash
 
 # #this follows the same convention as if it were opened by a vscode devcontainer
 code --folder-uri vscode-remote://attached-container+"$CONTAINER_HEX"$HOME/"${CONTAINER_NAME}"

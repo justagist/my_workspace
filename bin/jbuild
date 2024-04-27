@@ -139,8 +139,7 @@ def run_subprocess(
     )
     process.wait()
 
-    LOGGER.info("Subprocess return code: {0}".format(process.returncode))
-    print("Command", command)
+    LOGGER.debug("Subprocess return code: {0}".format(process.returncode))
     if capture_output:
         stdout_data, stderr_data = process.communicate()
         print(
