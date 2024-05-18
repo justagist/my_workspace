@@ -15,7 +15,7 @@ docker stop "$TEMP_CONTAINER_NAME" || true
 
 IMAGE_NAME="$CONTAINER_NAME:dev"
 
-rocker --nvidia --name "$TEMP_CONTAINER_NAME" --image-name "$IMAGE_NAME" --pull --oyr-run-arg " --detach" --deps-dependencies ros:humble
+rocker  --deps --nvidia --name "$TEMP_CONTAINER_NAME" --image-name "$IMAGE_NAME" --pull --oyr-run-arg " --detach" ros:humble
 
 docker kill "$TEMP_CONTAINER_NAME" || true
 docker stop "$TEMP_CONTAINER_NAME" || true
